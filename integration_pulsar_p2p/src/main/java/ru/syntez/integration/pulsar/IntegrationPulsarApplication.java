@@ -2,7 +2,6 @@ package ru.syntez.integration.pulsar;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.pulsar.client.api.*;
-import org.yaml.snakeyaml.Yaml;
 import ru.syntez.integration.pulsar.entities.DocumentTypeEnum;
 import ru.syntez.integration.pulsar.entities.KeyTypeEnum;
 import ru.syntez.integration.pulsar.entities.RoutingDocument;
@@ -10,20 +9,17 @@ import ru.syntez.integration.pulsar.pulsar.ConsumerCreator;
 import ru.syntez.integration.pulsar.pulsar.PulsarConfig;
 import ru.syntez.integration.pulsar.utils.ResultOutput;
 
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import static ru.syntez.integration.pulsar.utils.DocumentUtils.*;
-import static ru.syntez.integration.pulsar.pulsar.PulsarConfig.*;
+import static ru.syntez.integration.pulsar.pulsar.PulsarConfig.loadFromResource;
+import static ru.syntez.integration.pulsar.utils.DocumentUtils.createDocument;
+import static ru.syntez.integration.pulsar.utils.DocumentUtils.serializeDocument;
 
 /**
  * Main class
