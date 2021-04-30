@@ -7,6 +7,7 @@ import ru.syntez.integration.pulsar.entities.DocumentTypeEnum;
 import ru.syntez.integration.pulsar.entities.KeyTypeEnum;
 import ru.syntez.integration.pulsar.entities.RoutingDocument;
 import ru.syntez.integration.pulsar.pulsar.ConsumerCreator;
+import ru.syntez.integration.pulsar.pulsar.PulsarConfig;
 import ru.syntez.integration.pulsar.utils.ResultOutput;
 
 import java.io.InputStream;
@@ -22,6 +23,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static ru.syntez.integration.pulsar.utils.DocumentUtils.*;
+import static ru.syntez.integration.pulsar.pulsar.PulsarConfig.*;
 
 /**
  * Main class
@@ -34,7 +36,7 @@ public class IntegrationPulsarApplication {
     private final static Logger LOG = Logger.getLogger(ru.syntez.integration.pulsar.IntegrationPulsarApplication.class.getName());
     private static AtomicInteger msg_sent_counter = new AtomicInteger(0);
     private static AtomicInteger msg_received_counter = new AtomicInteger(0);
-    private static ru.syntez.integration.pulsar.pulsar.PulsarConfig config;
+    private static PulsarConfig config;
     private static Map<String, Set<String>> consumerRecordSetMap = new ConcurrentHashMap<>();
     private static PulsarClient client;
 
@@ -43,15 +45,7 @@ public class IntegrationPulsarApplication {
 
     public static void main(String[] args) {
 
-        Yaml yaml = new Yaml();
-        //try( InputStream in = Files.newInputStream( Paths.get( args[ 0 ] ) ) ) {
-        try (InputStream in = Files.newInputStream(Paths.get(IntegrationPulsarApplication.class.getResource("/application.yml").toURI()))) {
-            config = yaml.loadAs(in, ru.syntez.integration.pulsar.pulsar.PulsarConfig.class);
-            LOG.log(Level.INFO, config.toString());
-        } catch (Exception e) {
-            LOG.log(Level.WARNING, "Error load PulsarConfig from resource", e);
-            return;
-        }
+        config = loadFromResource("/application.yml").orElseThrow(RuntimeException::new);
 
         try {
             client = PulsarClient.builder()
