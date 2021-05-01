@@ -1,6 +1,5 @@
 package ru.syntez.integration.pulsar;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.pulsar.client.api.*;
 import ru.syntez.integration.pulsar.entities.DocumentTypeEnum;
 import ru.syntez.integration.pulsar.entities.KeyTypeEnum;
@@ -21,7 +20,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static ru.syntez.integration.pulsar.pulsar.PulsarConfig.loadFromResource;
-import static ru.syntez.integration.pulsar.utils.DocumentUtils.createDocument;
 import static ru.syntez.integration.pulsar.utils.DocumentUtils.serializeDocument;
 
 /**
@@ -191,22 +189,15 @@ public class IntegrationPulsarApplication {
      * @throws InterruptedException
      */
     private static void runConsumersWithoutTimeout(Integer consumerCount, Boolean withKeys, Boolean withVersions) throws InterruptedException {
+        Runnable producerScenario;
+        if (withKeys && withVersions) producerScenario = () -> runProducerWithVersions(config.getTopicName());
+        else if (!withKeys) producerScenario = () -> runProducerWithoutKeys(config.getTopicName());
+        else producerScenario = () -> runProducerWithKeys(config.getTopicName());
+
         ExecutorService executorService = Executors.newFixedThreadPool(consumerCount + 1);
-        if (withKeys) {
-            if (withVersions) {
-                executorService.execute(ru.syntez.integration.pulsar.IntegrationPulsarApplication::runProducerWithVersions);
-            } else {
-                executorService.execute(() -> {
-                    try {
-                        runProducerWithKeys(config.getTopicName());
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                });
-            }
-        } else {
-            executorService.execute(ru.syntez.integration.pulsar.IntegrationPulsarApplication::runProducerWithoutKeys);
-        }
+        executorService.execute(producerScenario);
+
+
         for (int i = 0; i < consumerCount; i++) {
             String consumerId = Integer.toString(i + 1);
             executorService.execute(() -> {
@@ -277,24 +268,21 @@ public class IntegrationPulsarApplication {
      * Отправка сообщений без ключа для первого кейса - проверка гарантии at-least-once
      * TODO выделить в отдельный юзкейс
      */
-    private static void runProducerWithoutKeys() {
-        RoutingDocument document = createDocument();
-        try {
-            Producer<byte[]> producer = client.newProducer()
-                    .topic(config.getTopicName())
-                    .compressionType(CompressionType.LZ4)
-                    .create();
-            for (int index = 0; index < config.getMessageCount(); index++) {
-                document.setDocId(index);
-                document.setDocType(DocumentTypeEnum.invoice);
-                byte[] msgValue = serializeDocument(document);
-                producer.newMessage().value(msgValue).send();
-                msg_sent_counter.incrementAndGet();
-                //LOG.info("Send message " + index);
-            }
+    private static void runProducerWithoutKeys(String topicName) {
+        try (Producer<byte[]> producer = client.newProducer()
+                .topic(topicName)
+                .compressionType(CompressionType.LZ4)
+                .create()) {
+
+            PulsarSender sender = new PulsarSender(producer);
+            sender.send(
+                    RoutingDocument::createInvoice,
+                    document -> null,
+                    config.getMessageCount()
+            );
             producer.flush();
         } catch (Exception e) {
-            e.printStackTrace();
+            LOG.log(Level.SEVERE, "Error producing documents to pulsar", e);
         }
     }
 
@@ -302,9 +290,9 @@ public class IntegrationPulsarApplication {
      * Отправка сообщений с уникальным ключом для второго кейса - проверка гарантии at-most-once
      * TODO выделить в отдельный юзкейс
      */
-    private static void runProducerWithKeys(String topicName) throws PulsarClientException, JsonProcessingException {
+    private static void runProducerWithKeys(String topicName) {
         try (Producer<byte[]> producer = client.newProducer()
-                .topic(topicName)
+                .topic(config.getTopicName())
                 .compressionType(CompressionType.LZ4)
                 .create()) {
 
@@ -323,6 +311,8 @@ public class IntegrationPulsarApplication {
             );
             producer.flush();
             LOG.info(String.format("Количество отправленных уникальных сообщений: %s", sentCount));
+        } catch (PulsarClientException e) {
+            LOG.log(Level.SEVERE, "Error producing documents to pulsar", e);
         }
     }
 
@@ -332,10 +322,10 @@ public class IntegrationPulsarApplication {
      *
      * @return
      */
-    private static void runProducerWithVersions() {
+    private static void runProducerWithVersions(String topicName) {
         try (Producer<byte[]> producer =
                      client.newProducer()
-                             .topic(config.getTopicName())
+                             .topic(topicName)
                              .compressionType(CompressionType.LZ4)
                              .create()) {
 
@@ -356,7 +346,7 @@ public class IntegrationPulsarApplication {
                     config.getMessageCount()
             );
 
-
+            producer.flush();
         } catch (PulsarClientException e) {
             LOG.log(Level.SEVERE, "Error producing documents to pulsar", e);
         }
