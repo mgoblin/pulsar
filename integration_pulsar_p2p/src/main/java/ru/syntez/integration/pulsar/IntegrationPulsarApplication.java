@@ -8,6 +8,7 @@ import ru.syntez.integration.pulsar.entities.RoutingDocument;
 import ru.syntez.integration.pulsar.pulsar.ConsumerCreator;
 import ru.syntez.integration.pulsar.pulsar.PulsarConfig;
 import ru.syntez.integration.pulsar.pulsar.sender.PulsarSender;
+import ru.syntez.integration.pulsar.pulsar.sender.RoutingDocumentGenerator;
 import ru.syntez.integration.pulsar.utils.ResultOutput;
 
 import java.util.*;
@@ -48,6 +49,7 @@ public class IntegrationPulsarApplication {
             client = PulsarClient.builder()
                     .serviceUrl(config.getBrokers())
                     .build();
+
 
             //кейс ATLEAST_ONCE
             LOG.info("Запуск проверки гарантии доставки ATLEAST_ONCE...");
@@ -301,44 +303,27 @@ public class IntegrationPulsarApplication {
      * TODO выделить в отдельный юзкейс
      */
     private static void runProducerWithKeys(String topicName) throws PulsarClientException, JsonProcessingException {
-        RoutingDocument document = createDocument();
-        //Close producer
-        Producer<byte[]> producer = client.newProducer()
+        try (Producer<byte[]> producer = client.newProducer()
                 .topic(topicName)
                 .compressionType(CompressionType.LZ4)
-                .create();
+                .create()) {
 
-        PulsarSender sender = new PulsarSender(producer);
-        int sentMessageCount = sender.send(
-                (int id) -> {
-                    RoutingDocument doc = createDocument();
-                    doc.setDocType((id % 2) == 0 ? DocumentTypeEnum.order : DocumentTypeEnum.invoice);
-                    doc.setDocId(id);
-                    return doc;
-                },
-                (RoutingDocument doc) -> Optional.of(String.valueOf(doc.getDocId())),
-                config.getMessageCount()
-        );
-        for (int index = 0; index < config.getMessageCount(); index++) {
-            document.setDocId(index);
-            if ((index % 2) == 0) {
-                document.setDocType(DocumentTypeEnum.order);
-            } else {
-                document.setDocType(DocumentTypeEnum.invoice);
-            }
-            byte[] msgValue = serializeDocument(document);
-            String messageKey = document.getDocType().name() + "_" + getMessageKey(index, KeyTypeEnum.UUID);
-            producer.newMessage()
-                    .key(messageKey)
-                    .value(msgValue)
-                    .property("my-key", "my-value")
-                    .send();
-            msg_sent_counter.incrementAndGet();
-            //LOG.info("Send message " + index + "; Key=" + messageKey + "; topic = " + topicName);
+            RoutingDocumentGenerator orderOrInvoice = (int id) -> {
+                RoutingDocument doc = new RoutingDocument();
+                doc.setDocId(id);
+                doc.setDocType((id % 2) == 0 ? DocumentTypeEnum.order : DocumentTypeEnum.invoice);
+                return doc;
+            };
+
+            PulsarSender sender = new PulsarSender(producer);
+            int sentCount = sender.send(
+                    orderOrInvoice,
+                    document -> document.getDocType().name() + "_" + UUID.randomUUID(),
+                    config.getMessageCount()
+            );
+            producer.flush();
+            LOG.info(String.format("Количество отправленных уникальных сообщений: %s", sentCount));
         }
-        producer.flush();
-        LOG.info(String.format("Количество отправленных уникальных сообщений: %s", msg_sent_counter.get()));
-
     }
 
     /**

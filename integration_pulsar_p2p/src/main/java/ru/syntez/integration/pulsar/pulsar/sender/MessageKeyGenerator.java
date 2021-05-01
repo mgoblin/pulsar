@@ -6,5 +6,5 @@ import java.util.Optional;
 
 @FunctionalInterface
 public interface MessageKeyGenerator {
-    Optional<String> generate(RoutingDocument document);
+    String generate(RoutingDocument document);
 }

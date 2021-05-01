@@ -28,7 +28,7 @@ public class PulsarSender {
         for (int index = 0; index < times; index++) {
             try {
                 RoutingDocument document = docGenerator.create(index);
-                Optional<String> msgKey = keyGenerator.generate(document);
+                Optional<String> msgKey = Optional.ofNullable(keyGenerator.generate(document));
                 if (msgKey.isPresent())
                     producer.newMessage().key(msgKey.get()).value(serializeDocument(document)).send();
                 else
@@ -43,6 +43,6 @@ public class PulsarSender {
     }
 
     public int sendWithDocIdKey(RoutingDocumentGenerator docGenerator, int times) {
-        return send(docGenerator, (RoutingDocument doc) -> Optional.of("key_" + doc.getDocId()), times);
+        return send(docGenerator, doc -> "key_" + doc.getDocId(), times);
     }
 }
