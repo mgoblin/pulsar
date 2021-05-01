@@ -11,7 +11,6 @@ import java.io.Serializable;
  * RoutingDocument model
  *
  * @author Skyhunter
- * @date 18.01.2021
  */
 @XmlRootElement(name = "routingDocument")
 @XmlAccessorType(XmlAccessType.FIELD)
@@ -21,4 +20,24 @@ public class RoutingDocument implements Serializable {
     private DocumentTypeEnum docType;
     private int docId;
 
+    public static RoutingDocument createUnknown(int id) {
+        final RoutingDocument document = new RoutingDocument();
+        document.setDocId(id);
+        document.setDocType(DocumentTypeEnum.unknown);
+        return document;
+    }
+
+    public static RoutingDocument createOrder(int id) {
+        final RoutingDocument document = new RoutingDocument();
+        document.setDocId(id);
+        document.setDocType(DocumentTypeEnum.order);
+        return document;
+    }
+
+    public static RoutingDocument createInvoice(int id) {
+        final RoutingDocument document = new RoutingDocument();
+        document.setDocId(id);
+        document.setDocType(DocumentTypeEnum.invoice);
+        return document;
+    }
 }

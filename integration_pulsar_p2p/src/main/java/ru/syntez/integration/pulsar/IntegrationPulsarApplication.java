@@ -7,6 +7,7 @@ import ru.syntez.integration.pulsar.entities.KeyTypeEnum;
 import ru.syntez.integration.pulsar.entities.RoutingDocument;
 import ru.syntez.integration.pulsar.pulsar.ConsumerCreator;
 import ru.syntez.integration.pulsar.pulsar.PulsarConfig;
+import ru.syntez.integration.pulsar.pulsar.sender.PulsarSender;
 import ru.syntez.integration.pulsar.utils.ResultOutput;
 
 import java.util.*;
@@ -15,6 +16,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static ru.syntez.integration.pulsar.pulsar.PulsarConfig.loadFromResource;
@@ -25,7 +27,6 @@ import static ru.syntez.integration.pulsar.utils.DocumentUtils.serializeDocument
  * Main class
  *
  * @author Skyhunter
- * @date 23.04.2021
  */
 public class IntegrationPulsarApplication {
 
@@ -48,7 +49,7 @@ public class IntegrationPulsarApplication {
                     .serviceUrl(config.getBrokers())
                     .build();
 
-             //кейс ATLEAST_ONCE
+            //кейс ATLEAST_ONCE
             LOG.info("Запуск проверки гарантии доставки ATLEAST_ONCE...");
             runConsumersWithoutTimeout(3, false, false);
             LOG.info("Проверка гарантии доставки ATLEAST_ONCE завершена.");
@@ -155,7 +156,7 @@ public class IntegrationPulsarApplication {
                         true
                 );
                 startConsumer(consumer);
-               // consumer.close();
+                // consumer.close();
             } catch (PulsarClientException e) {
                 e.printStackTrace();
             }
@@ -169,7 +170,7 @@ public class IntegrationPulsarApplication {
                         true
                 );
                 startConsumer(consumer);
-               // consumer.close();
+                // consumer.close();
             } catch (PulsarClientException e) {
                 e.printStackTrace();
             }
@@ -301,10 +302,23 @@ public class IntegrationPulsarApplication {
      */
     private static void runProducerWithKeys(String topicName) throws PulsarClientException, JsonProcessingException {
         RoutingDocument document = createDocument();
+        //Close producer
         Producer<byte[]> producer = client.newProducer()
                 .topic(topicName)
                 .compressionType(CompressionType.LZ4)
                 .create();
+
+        PulsarSender sender = new PulsarSender(producer);
+        int sentMessageCount = sender.send(
+                (int id) -> {
+                    RoutingDocument doc = createDocument();
+                    doc.setDocType((id % 2) == 0 ? DocumentTypeEnum.order : DocumentTypeEnum.invoice);
+                    doc.setDocId(id);
+                    return doc;
+                },
+                (RoutingDocument doc) -> Optional.of(String.valueOf(doc.getDocId())),
+                config.getMessageCount()
+        );
         for (int index = 0; index < config.getMessageCount(); index++) {
             document.setDocId(index);
             if ((index % 2) == 0) {
@@ -330,42 +344,36 @@ public class IntegrationPulsarApplication {
     /**
      * Генерация сообщений с тремя версиями на один ключ
      * TODO выделить в отдельный юзкейс
+     *
+     * @return
      */
     private static void runProducerWithVersions() {
-        RoutingDocument document = createDocument();
-        try {
-            Producer<byte[]> producer = client.newProducer()
-                    .topic(config.getTopicName())
-                    .compressionType(CompressionType.LZ4)
-                    .create();
-            Map<Integer, String> keyMap = new HashMap<>();
-            for (int index = 0; index < config.getMessageCount(); index++) {
-                document.setDocId(index);
-                document.setDocType(DocumentTypeEnum.unknown);
-                String keyValue = getMessageKey(index, KeyTypeEnum.NUMERIC);
-                keyMap.put(index, keyValue);
-                byte[] msgValue = serializeDocument(document);
-                producer.newMessage().key(keyValue).value(msgValue).send();
-                msg_sent_counter.incrementAndGet();
-            }
+        try (Producer<byte[]> producer =
+                     client.newProducer()
+                             .topic(config.getTopicName())
+                             .compressionType(CompressionType.LZ4)
+                             .create()) {
 
-            for (int index = 0; index < config.getMessageCount(); index++) {
-                document.setDocId(index);
-                document.setDocType(DocumentTypeEnum.order);
-                byte[] msgValue = serializeDocument(document);
-                producer.newMessage().key(keyMap.get(index)).value(msgValue).send();
-                msg_sent_counter.incrementAndGet();
-            }
+            PulsarSender sender = new PulsarSender(producer);
 
-            for (int index = 0; index < config.getMessageCount(); index++) {
-                document.setDocId(index);
-                document.setDocType(DocumentTypeEnum.invoice);
-                byte[] msgValue = serializeDocument(document);
-                producer.newMessage().key(keyMap.get(index)).value(msgValue).send();
-                msg_sent_counter.incrementAndGet();
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
+            int sentUnknownDocumentsCount = sender.sendWithDocIdKey(
+                    RoutingDocument::createUnknown,
+                    config.getMessageCount()
+            );
+
+            int sentOrderDocumentsCount = sender.sendWithDocIdKey(
+                    RoutingDocument::createOrder,
+                    config.getMessageCount()
+            );
+
+            int sentInvoiceDocumentsCount = sender.sendWithDocIdKey(
+                    RoutingDocument::createInvoice,
+                    config.getMessageCount()
+            );
+
+
+        } catch (PulsarClientException e) {
+            LOG.log(Level.SEVERE, "Error producing documents to pulsar", e);
         }
     }
 
