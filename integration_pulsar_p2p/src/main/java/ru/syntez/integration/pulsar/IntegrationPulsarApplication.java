@@ -1,26 +1,30 @@
 package ru.syntez.integration.pulsar;
 
-import org.apache.pulsar.client.api.*;
-import ru.syntez.integration.pulsar.entities.DocumentTypeEnum;
+import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.Message;
+import org.apache.pulsar.client.api.PulsarClient;
+import org.apache.pulsar.client.api.PulsarClientException;
 import ru.syntez.integration.pulsar.entities.KeyTypeEnum;
-import ru.syntez.integration.pulsar.entities.RoutingDocument;
 import ru.syntez.integration.pulsar.pulsar.ConsumerCreator;
 import ru.syntez.integration.pulsar.pulsar.PulsarConfig;
-import ru.syntez.integration.pulsar.pulsar.sender.PulsarSender;
-import ru.syntez.integration.pulsar.pulsar.sender.RoutingDocumentGenerator;
+import ru.syntez.integration.pulsar.pulsar.scenarios.ProducerTestScenario;
+import ru.syntez.integration.pulsar.pulsar.scenarios.ProducerWithKeys;
+import ru.syntez.integration.pulsar.pulsar.scenarios.ProducerWithVersions;
+import ru.syntez.integration.pulsar.pulsar.scenarios.ProducerWithoutKeys;
 import ru.syntez.integration.pulsar.utils.ResultOutput;
 
-import java.util.*;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static ru.syntez.integration.pulsar.pulsar.PulsarConfig.loadFromResource;
-import static ru.syntez.integration.pulsar.utils.DocumentUtils.serializeDocument;
 
 /**
  * Main class
@@ -107,14 +111,13 @@ public class IntegrationPulsarApplication {
     }
 
     private static void runConsumersWithFilter() throws InterruptedException {
+
         ExecutorService executorService = Executors.newFixedThreadPool(3);
         executorService.execute(() -> {
-            try {
-                runProducerWithKeys(config.getTopicInputFilterName());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            ProducerTestScenario testScenario = new ProducerWithKeys(client, config);
+            testScenario.run(config.getTopicInputFilterName());
         });
+
         executorService.execute(() -> {
             try {
                 String consumerId = "filter";
@@ -140,13 +143,12 @@ public class IntegrationPulsarApplication {
      */
     private static void runConsumersWithRouting() throws InterruptedException {
         ExecutorService executorService = Executors.newFixedThreadPool(3);
+
         executorService.execute(() -> {
-            try {
-                runProducerWithKeys(config.getTopicInputRouteName());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            ProducerTestScenario testScenario = new ProducerWithKeys(client, config);
+            testScenario.run(config.getTopicInputFilterName());
         });
+
         executorService.execute(() -> {
             try {
                 String consumerId = "order";
@@ -189,10 +191,15 @@ public class IntegrationPulsarApplication {
      * @throws InterruptedException
      */
     private static void runConsumersWithoutTimeout(Integer consumerCount, Boolean withKeys, Boolean withVersions) throws InterruptedException {
-        Runnable producerScenario;
-        if (withKeys && withVersions) producerScenario = () -> runProducerWithVersions(config.getTopicName());
-        else if (!withKeys) producerScenario = () -> runProducerWithoutKeys(config.getTopicName());
-        else producerScenario = () -> runProducerWithKeys(config.getTopicName());
+
+        Runnable producerScenario = () -> {
+            ProducerTestScenario testScenario;
+            if (withKeys && withVersions) testScenario = new ProducerWithVersions(client, config);
+            else if (!withKeys) testScenario = new ProducerWithoutKeys(client, config);
+            else  testScenario = new ProducerWithKeys(client, config);
+
+            testScenario.run(config.getTopicName());
+        };
 
         ExecutorService executorService = Executors.newFixedThreadPool(consumerCount + 1);
         executorService.execute(producerScenario);
@@ -230,12 +237,10 @@ public class IntegrationPulsarApplication {
      */
     private static void runConsumersWithTimeout(Integer consumerCount) throws InterruptedException {
         ExecutorService executorService = Executors.newFixedThreadPool(consumerCount + 1);
+
         executorService.execute(() -> {
-            try {
-                runProducerWithKeys(config.getTopicName());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            ProducerTestScenario testScenario = new ProducerWithKeys(client, config);
+            testScenario.run(config.getTopicName());
         });
         executorService.awaitTermination(config.getTimeoutBeforeConsume(), TimeUnit.MINUTES);
 
@@ -262,94 +267,6 @@ public class IntegrationPulsarApplication {
         //Минуты должно хватить на обработку всех сообщений
         executorService.awaitTermination(1, TimeUnit.MINUTES);
 
-    }
-
-    /**
-     * Отправка сообщений без ключа для первого кейса - проверка гарантии at-least-once
-     * TODO выделить в отдельный юзкейс
-     */
-    private static void runProducerWithoutKeys(String topicName) {
-        try (Producer<byte[]> producer = client.newProducer()
-                .topic(topicName)
-                .compressionType(CompressionType.LZ4)
-                .create()) {
-
-            PulsarSender sender = new PulsarSender(producer);
-            sender.send(
-                    RoutingDocument::createInvoice,
-                    document -> null,
-                    config.getMessageCount()
-            );
-            producer.flush();
-        } catch (Exception e) {
-            LOG.log(Level.SEVERE, "Error producing documents to pulsar", e);
-        }
-    }
-
-    /**
-     * Отправка сообщений с уникальным ключом для второго кейса - проверка гарантии at-most-once
-     * TODO выделить в отдельный юзкейс
-     */
-    private static void runProducerWithKeys(String topicName) {
-        try (Producer<byte[]> producer = client.newProducer()
-                .topic(config.getTopicName())
-                .compressionType(CompressionType.LZ4)
-                .create()) {
-
-            RoutingDocumentGenerator orderOrInvoice = (int id) -> {
-                RoutingDocument doc = new RoutingDocument();
-                doc.setDocId(id);
-                doc.setDocType((id % 2) == 0 ? DocumentTypeEnum.order : DocumentTypeEnum.invoice);
-                return doc;
-            };
-
-            PulsarSender sender = new PulsarSender(producer);
-            int sentCount = sender.send(
-                    orderOrInvoice,
-                    document -> document.getDocType().name() + "_" + UUID.randomUUID(),
-                    config.getMessageCount()
-            );
-            producer.flush();
-            LOG.info(String.format("Количество отправленных уникальных сообщений: %s", sentCount));
-        } catch (PulsarClientException e) {
-            LOG.log(Level.SEVERE, "Error producing documents to pulsar", e);
-        }
-    }
-
-    /**
-     * Генерация сообщений с тремя версиями на один ключ
-     * TODO выделить в отдельный юзкейс
-     *
-     * @return
-     */
-    private static void runProducerWithVersions(String topicName) {
-        try (Producer<byte[]> producer =
-                     client.newProducer()
-                             .topic(topicName)
-                             .compressionType(CompressionType.LZ4)
-                             .create()) {
-
-            PulsarSender sender = new PulsarSender(producer);
-
-            int sentUnknownDocumentsCount = sender.sendWithDocIdKey(
-                    RoutingDocument::createUnknown,
-                    config.getMessageCount()
-            );
-
-            int sentOrderDocumentsCount = sender.sendWithDocIdKey(
-                    RoutingDocument::createOrder,
-                    config.getMessageCount()
-            );
-
-            int sentInvoiceDocumentsCount = sender.sendWithDocIdKey(
-                    RoutingDocument::createInvoice,
-                    config.getMessageCount()
-            );
-
-            producer.flush();
-        } catch (PulsarClientException e) {
-            LOG.log(Level.SEVERE, "Error producing documents to pulsar", e);
-        }
     }
 
     private static Consumer createAndStartConsumer(String consumerId, Boolean withKeys) throws PulsarClientException {
